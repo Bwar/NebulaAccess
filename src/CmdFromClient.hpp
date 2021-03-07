@@ -10,26 +10,25 @@
 #ifndef SRC_CMDFROMCLIENT_CMDFROMCLIENT_HPP_
 #define SRC_CMDFROMCLIENT_CMDFROMCLIENT_HPP_
 
-#include "cmd/Cmd.hpp"
-#include "StepFromClient.hpp"
+#include <actor/cmd/Cmd.hpp>
+#include <actor/DynamicCreator.hpp>
 
-namespace im
+namespace acc
 {
 
-class CmdFromClient: public oss::Cmd
+class CmdFromClient: public neb::Cmd,
+    public neb::DynamicCreator<CmdFromClient, int32>
 {
 public:
-    CmdFromClient();
+    CmdFromClient(int32 iCmd);
     virtual ~CmdFromClient();
-
     virtual bool AnyMessage(
-                    const oss::tagMsgShell& stMsgShell,
-                    const MsgHead& oInMsgHead,
-                    const MsgBody& oInMsgBody);
-
-    StepFromClient* pStepFromClient;
+            std::shared_ptr<neb::SocketChannel> pChannel,
+            const MsgHead& oMsgHead,
+            const MsgBody& oMsgBody);
 };
 
-} /* namespace im */
+} /* namespace acc */
 
 #endif /* SRC_CMDFROMCLIENT_CMDFROMCLIENT_HPP_ */
+

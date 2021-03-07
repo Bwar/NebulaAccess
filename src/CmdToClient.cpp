@@ -8,13 +8,14 @@
  * Modify history:
  ******************************************************************************/
 #include "CmdToClient.hpp"
+#include <actor/step/Step.hpp>
 
 
-namespace im
+namespace acc
 {
 
-CmdToClient::CmdToClient()
-    : pStepToClient(NULL)
+CmdToClient::CmdToClient(int32 iCmd)
+    : neb::Cmd(iCmd)
 {
 }
 
@@ -22,34 +23,18 @@ CmdToClient::~CmdToClient()
 {
 }
 
-bool CmdToClient::AnyMessage(
-                    const oss::tagMsgShell& stMsgShell,
-                    const MsgHead& oInMsgHead,
-                    const MsgBody& oInMsgBody)
+bool CmdToClient::AnyMessage(std::shared_ptr<neb::SocketChannel> pChannel,
+    const MsgHead& oMsgHead, const MsgBody& oMsgBody)
 {
-    LOG4CPLUS_DEBUG_FMT(GetLogger(), "%s()", __FUNCTION__);
-    pStepToClient = new StepToClient(stMsgShell, oInMsgHead, oInMsgBody);
-    if (pStepToClient == NULL)
+    auto pStepToClient = MakeSharedStep("acc::StepToClient", pChannel, oMsgHead, oMsgBody);
+    if (pStepToClient == nullptr)
     {
-        LOG4CPLUS_ERROR_FMT(GetLogger(), "error %d: new StepToClient() error!", oss::ERR_NEW);
+        LOG4_ERROR("error %d: new StepFromClient() error!", neb::ERR_NEW);
         return(false);
     }
-
-    if (RegisterCallback(pStepToClient))
-    {
-        if (oss::STATUS_CMD_RUNNING == pStepToClient->Emit(ERR_OK))
-        {
-            return(true);
-        }
-        DeleteCallback(pStepToClient);
-        return(false);
-    }
-    else
-    {
-        delete pStepToClient;
-        pStepToClient = NULL;
-        return(false);
-    }
+    pStepToClient->Emit();
+    return(true);
 }
 
-} /* namespace oss */
+} /* namespace acc */
+

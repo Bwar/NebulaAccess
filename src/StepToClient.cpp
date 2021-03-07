@@ -7,17 +7,14 @@
  * @note
  * Modify history:
  ******************************************************************************/
-#include "ImError.h"
 #include "StepToClient.hpp"
 
-namespace im
+namespace acc
 {
 
-StepToClient::StepToClient(
-                const oss::tagMsgShell& stMsgShell,
-                const MsgHead& oInMsgHead,
-                const MsgBody& oInMsgBody)
-    : oss::Step(stMsgShell, oInMsgHead, oInMsgBody)
+StepToClient::StepToClient(std::shared_ptr<neb::SocketChannel> pChannel,
+        const MsgHead& oMsgHead, const MsgBody& oMsgBody)
+    : m_pChannel(pChannel), m_oMsgHead(oMsgHead), m_oMsgBody(oMsgBody)
 {
 }
 
@@ -25,70 +22,82 @@ StepToClient::~StepToClient()
 {
 }
 
-oss::E_CMD_STATUS StepToClient::Emit(int iErrno, const std::string& strErrMsg, const std::string& strErrShow)
+neb::E_CMD_STATUS StepToClient::Emit(int iErrno, const std::string& strErrMsg, void* data)
 {
-    bool bSendResult = false;
-    MsgHead oOutMsgHead = m_oReqMsgHead;
-    oOutMsgHead.set_seq(GetSequence());     // 更换消息头的seq后直接转发
-    if (m_oReqMsgBody.has_session_id())
+    MsgBody oOutMsgBody;
+    if (m_oMsgBody.has_req_target())
     {
-        char szIdentify[32] = {0};
-        snprintf(szIdentify, sizeof(szIdentify), "%u", m_oReqMsgBody.session_id());
-        bSendResult = Step::SendTo(szIdentify, oOutMsgHead, m_oReqMsgBody);
+        if (0 != m_oMsgBody.req_target().route_id())
+        {
+            if(SendTo(std::to_string(m_oMsgBody.req_target().route_id()),
+                    m_oMsgHead.cmd(), GetSequence(), m_oMsgBody, neb::CODEC_PROTO))
+            {
+                return(neb::CMD_STATUS_RUNNING);
+            }
+            else
+            {
+                oOutMsgBody.mutable_rsp_result()->set_code(neb::ERR_SESSION);
+                oOutMsgBody.mutable_rsp_result()->set_msg("send to "
+                        + std::to_string(m_oMsgBody.req_target().route_id()) + "failed.");
+                SendTo(m_pChannel, m_oMsgHead.cmd() + 1, m_oMsgHead.seq(), oOutMsgBody);
+                return(neb::CMD_STATUS_FAULT);
+            }
+        }
+        else if (m_oMsgBody.req_target().route().length() > 0)
+        {
+            if(SendTo(m_oMsgBody.req_target().route(),
+                    m_oMsgHead.cmd(), GetSequence(), m_oMsgBody, neb::CODEC_PROTO))
+            {
+                return(neb::CMD_STATUS_RUNNING);
+            }
+            else
+            {
+                oOutMsgBody.mutable_rsp_result()->set_code(neb::ERR_SESSION);
+                oOutMsgBody.mutable_rsp_result()->set_msg("send to "
+                        + m_oMsgBody.req_target().route() + "failed.");
+                SendTo(m_pChannel, m_oMsgHead.cmd() + 1, m_oMsgHead.seq(), oOutMsgBody);
+                return(neb::CMD_STATUS_FAULT);
+            }
+        }
+        else
+        {
+            oOutMsgBody.mutable_rsp_result()->set_code(neb::ERR_SESSION);
+            oOutMsgBody.mutable_rsp_result()->set_msg("missing MsgBody.req_target.route_id or "
+                    "MsgBody.req_target.route.");
+            SendTo(m_pChannel, m_oMsgHead.cmd() + 1, m_oMsgHead.seq(), oOutMsgBody);
+            return(neb::CMD_STATUS_FAULT);
+        }
     }
-    else if (m_oReqMsgBody.has_session())
-    {
-        bSendResult = Step::SendTo(m_oReqMsgBody.session(), oOutMsgHead, m_oReqMsgBody);
-    }
-    else
-    {
-        MsgBody oOutMsgBody;
-        OrdinaryResponse oRes;
-        oRes.set_err_no(ERR_NO_SESSION_ID_IN_MSGBODY);
-        oRes.set_err_msg("no session id!");
-        oOutMsgBody.set_body(oRes.SerializeAsString());
-        oOutMsgHead.set_cmd(oss::CMD_RSP_SYS_ERROR);
-        oOutMsgHead.set_seq(m_oReqMsgHead.seq());
-        oOutMsgHead.set_msgbody_len(oOutMsgBody.ByteSize());
-        Step::SendTo(m_stReqMsgShell, oOutMsgHead, oOutMsgBody);
-        return(oss::STATUS_CMD_COMPLETED);
-    }
-
-    if (bSendResult)
-    {
-        return(oss::STATUS_CMD_RUNNING);
-    }
-    else
-    {
-        MsgBody oOutMsgBody;
-        OrdinaryResponse oRes;
-        oRes.set_err_no(ERR_USER_OFFLINE);
-        oRes.set_err_msg("user offline!");
-        oOutMsgBody.set_body(oRes.SerializeAsString());
-        oOutMsgHead.set_cmd(oss::CMD_RSP_SYS_ERROR);
-        oOutMsgHead.set_seq(m_oReqMsgHead.seq());
-        oOutMsgHead.set_msgbody_len(oOutMsgBody.ByteSize());
-        Step::SendTo(m_stReqMsgShell, oOutMsgHead, oOutMsgBody);
-        return(oss::STATUS_CMD_COMPLETED);
-    }
+    oOutMsgBody.mutable_rsp_result()->set_code(neb::ERR_SESSION);
+    oOutMsgBody.mutable_rsp_result()->set_msg("missing MsgBody.req_target.");
+    SendTo(m_pChannel, m_oMsgHead.cmd() + 1, m_oMsgHead.seq(), oOutMsgBody);
+    return(neb::CMD_STATUS_FAULT);
 }
 
-oss::E_CMD_STATUS StepToClient::Callback(
-                    const oss::tagMsgShell& stMsgShell,
-                    const MsgHead& oInMsgHead,
-                    const MsgBody& oInMsgBody,
-                    void* data)
+neb::E_CMD_STATUS StepToClient::Callback(
+        std::shared_ptr<neb::SocketChannel> pChannel,
+        const MsgHead& oMsgHead, const MsgBody& oMsgBody, void* data)
 {
-    m_oReqMsgHead.set_cmd(oInMsgHead.cmd());
-    m_oReqMsgHead.set_msgbody_len(oInMsgBody.ByteSize());
-    Step::SendTo(m_stReqMsgShell, m_oReqMsgHead, oInMsgBody);
-    return(oss::STATUS_CMD_COMPLETED);
+    SendTo(m_pChannel, oMsgHead.cmd(), m_oMsgHead.seq(), oMsgBody);
+    return(neb::CMD_STATUS_COMPLETED);
 }
 
-oss::E_CMD_STATUS StepToClient::Timeout()
+neb::E_CMD_STATUS StepToClient::ErrBack(std::shared_ptr<neb::SocketChannel> pChannel,
+            int iErrno, const std::string& strErrMsg)
 {
-    return(oss::STATUS_CMD_FAULT);
+    MsgBody oOutMsgBody;
+    oOutMsgBody.mutable_rsp_result()->set_code(iErrno);
+    oOutMsgBody.mutable_rsp_result()->set_msg(strErrMsg);
+    SendTo(m_pChannel, m_oMsgHead.cmd() + 1, m_oMsgHead.seq(), oOutMsgBody);
+    return(neb::CMD_STATUS_FAULT);
 }
 
+neb::E_CMD_STATUS StepToClient::Timeout()
+{
+    LOG4_WARNING("cmd %u, seq %lu, logic timeout!", m_oMsgHead.cmd(), m_oMsgHead.seq());
+    return(neb::CMD_STATUS_FAULT);
+}
 
-} /* namespace im */
+} /* namespace acc */
+
+
